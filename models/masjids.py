@@ -26,3 +26,18 @@ akad_zakat=Table(
     Column('jenis_akad',String(255)),
 )
 
+rekap_zakat=Table(
+    'rekap_zakat',meta,
+    Column('id_rekap',String(255),primary_key=True),
+    Column('id_akad',String(255)),
+    Column('nama_muzzaki',String(255)),
+    Column('jenis_zakat',String(255)),
+    Column('jenis_akad',String(255)),
+    Column('jumlah_literan',Integer),
+    Column('jumlah_uang',Integer),
+    Column('harga_beras',Integer),
+    Column('jumlah_keluarga',Integer),
+    Column('tanggal_akad',Date,default=func.now()),
+    Column('tahun',Integer,default=func.extract('year', func.now())),    
+)
+

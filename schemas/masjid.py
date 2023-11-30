@@ -26,8 +26,6 @@ class AkadBase(BaseModel):
     nama_amil: str
     harga_beras: Optional[int] = None
     jumlah_keluarga: int
-    jumlah_literan: Optional[int] = None
-    jumlah_uang: Optional[int] = None
     jenis_zakat: str
     jenis_akad: str
 
@@ -35,12 +33,14 @@ class AkadZakat(AkadBase):
     id_akad: Optional[str] = None
     id_beras: Optional[int] = None
     tanggal_akad:Optional[date]
+    jumlah_literan: Optional[int] = None
+    jumlah_uang: Optional[int] = None
 
     class Config:
         orm_mode = True
 
 class AkadZakatCreate(AkadBase):
-    id_akad: Optional[str] = None
+    # id_akad: Optional[str] = None
     pass
 
 class AkadZakatInsert(AkadBase):

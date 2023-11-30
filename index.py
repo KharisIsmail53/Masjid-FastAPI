@@ -2,12 +2,16 @@ from fastapi import FastAPI, Depends
 # from schemas.masjid import Student
 from schemas.masjid import StockBerasCreate, StockBerasUpdate, StockBeras, AkadZakat, AkadZakatCreate,AkadZakatInsert
 from config.db import conn,SessionLocal
-from models.index import stock_beras, akad_zakat   
+from models.index import stock_beras, akad_zakat, rekap_zakat   
 from fastapi.encoders import jsonable_encoder
 from sqlalchemy.orm import Session
-from sqlalchemy import select,text,update
+from sqlalchemy import select,text,update,func,delete
 from typing import List, Dict, Any
+from datetime import datetime
+
 app = FastAPI()
+
+################ Stack Function ######################
 
 def get_db():
     db = SessionLocal()
@@ -30,6 +34,21 @@ def generate_next_id(db: Session, prefix: str):
 
     return next_id
 
+def generate_next_id_year(db: Session, prefix: str):
+    current_year = db.execute(func.year(func.now())).scalar()
+    last_id = db.execute(
+        text(f"SELECT id_akad FROM akad_zakat WHERE id_akad LIKE :prefix ORDER BY id_akad DESC LIMIT 1"),
+        {'prefix': f'{prefix}%'}
+    ).scalar()
+
+    if last_id:
+        numeric_part = int(last_id[len(prefix) + 1:])  # Skip the hyphen and year
+        next_id = f"{prefix}-{numeric_part + 1:03d}-{current_year}"
+    else:
+        next_id = f"{prefix}-001-{current_year}"
+
+    return next_id
+
 def get_id_beras_by_harga_beras(db: Session, harga_beras: int):
     query = select([stock_beras.c.id_beras]).where(stock_beras.c.harga_beras == harga_beras)
     result = db.execute(query).scalar()
@@ -49,13 +68,23 @@ def get_stock_beras(db: Session, harga_beras: str):
     ).scalar()
     return stock_beras
 
-# @app.get('/test')
-# async def index():
-#     return{
-#         "Success":True,
-#         "Msg":"Tes awal berhasil"
-#     }
+def generate_id_beras(db: Session):
+    last_id = db.execute(
+        text("SELECT id_beras FROM stock_beras ORDER BY id_beras DESC LIMIT 1")
+    ).scalar()
 
+    if last_id:
+        numeric_part = int(last_id)
+        next_id = numeric_part + 1
+    else:
+        next_id = 1
+
+    return next_id
+
+################ End Stack Function ######################
+
+################ Stack Route ######################
+################ Route Stock Beras ######################
 @app.get('/stock-beras', response_model=Dict[str, Any])
 async def index(db: Session = Depends(get_db)):
     query = select(stock_beras)
@@ -70,7 +99,9 @@ async def index(db: Session = Depends(get_db)):
     }
 @app.post('/tambah-stock',)
 async def store(stock_beras_create: StockBerasCreate, db: Session = Depends(get_db)):
+    id_beras = generate_id_beras(db)
     data = conn.execute(stock_beras.insert().values(
+        id_beras = id_beras,
         nama=stock_beras_create.nama,
         harga_beras=stock_beras_create.harga_beras,
         stock=stock_beras_create.stock,
@@ -86,25 +117,6 @@ async def store(stock_beras_create: StockBerasCreate, db: Session = Depends(get_
             "success": False,
             "msg":"Some Problem"
         }
-
-# @app.put('/api/students/{id}')
-# async def update(id:int,stock_beras_update:StockBerasUpdate):
-#     data=conn.execute(stock_beras.update().values(
-#         nama=stock_beras_update.nama,
-#         harga_beras=stock_beras_update.harga_beras,
-#         stock=stock_beras_update.stock,
-#     ).where(stock_beras.c.id==id))
-#     conn.commit()
-#     if data:
-#         return {
-#             "success": True,
-#             "msg":"Stock Beras Update Successfully"
-#         }
-#     else:
-#          return {
-#             "success": False,
-#             "msg":"Some Problem"
-#         }
 
 @app.put('/update-stock/{id}')
 async def update(id:int,stock_beras_update:StockBerasUpdate):
@@ -150,6 +162,21 @@ async def delete(id:int):
             "msg":"Some Problem"
         }
 
+@app.delete('/truncate-stock')
+async def delete():
+    data=conn.execute(stock_beras.delete())
+    conn.commit()
+    if data:
+        return {
+            "success": True,
+            "msg":"Table Stock Beras Delete Successfully"
+        }
+    else:
+         return {
+            "success": False,
+            "msg":"Some Problem"
+        }
+
 @app.get('/search-beras/{search}',response_model=Dict[str, Any])
 async def search(id: str, db: Session = Depends(get_db)):
     result = db.execute(select(stock_beras).where(stock_beras.c.id_beras.like('%' + id + '%'))).fetchone()
@@ -172,6 +199,9 @@ async def search(harga_beras: str, db: Session = Depends(get_db)):
         "data":data
     }
 
+################ End Route Stock Beras ######################
+################ Route Akad Zakat ######################
+
 @app.post('/tambah-akad',)
 async def store(akad_create: AkadZakatCreate, db: Session = Depends(get_db)):
     if akad_create.harga_beras is not None and akad_create.harga_beras != 0:
@@ -179,6 +209,7 @@ async def store(akad_create: AkadZakatCreate, db: Session = Depends(get_db)):
         id_beras = get_id_beras(db, akad_create.harga_beras)
         # Hitung jumlah pengurangan stock berdasarkan jumlah_keluarga * 3.5
         pengurangan_stock = akad_create.jumlah_keluarga * 3.5
+        jumlah_uang = akad_create.jumlah_keluarga*3.5*akad_create.harga_beras
         # Dapatkan nilai stock terkini
         stock_beras_value = get_stock_beras(db, akad_create.harga_beras)
         stock_terkini = stock_beras_value - pengurangan_stock
@@ -195,20 +226,47 @@ async def store(akad_create: AkadZakatCreate, db: Session = Depends(get_db)):
             harga_beras=akad_create.harga_beras,
             jumlah_keluarga=akad_create.jumlah_keluarga,
             jumlah_literan=None,
-            jumlah_uang=akad_create.jumlah_uang,
+            jumlah_uang=jumlah_uang,
+            jenis_zakat=akad_create.jenis_zakat,
+            jenis_akad=akad_create.jenis_akad,
+        ))
+        conn.commit()
+        id_rekap = generate_next_id_year(db, 'ZMAH')
+        rekap = conn.execute(rekap_zakat.insert().values(
+            id_rekap=id_rekap,
+            id_akad=id_akad,
+            nama_muzzaki=akad_create.nama_muzzaki,
+            harga_beras=akad_create.harga_beras,
+            jumlah_keluarga=akad_create.jumlah_keluarga,
+            jumlah_literan=None,
+            jumlah_uang=jumlah_uang,
             jenis_zakat=akad_create.jenis_zakat,
             jenis_akad=akad_create.jenis_akad,
         ))
         conn.commit()
     elif akad_create.harga_beras == 0:
         id_akad = generate_next_id(db, 'ZMAH')
+        jumlah_literan = akad_create.jumlah_keluarga * 3.5
         data = conn.execute(akad_zakat.insert().values(
             id_akad=id_akad,
             nama_muzzaki=akad_create.nama_muzzaki,
             nama_amil=akad_create.nama_amil,
             harga_beras=None,
             jumlah_keluarga=akad_create.jumlah_keluarga,
-            jumlah_literan=akad_create.jumlah_literan,
+            jumlah_literan=jumlah_literan,
+            jumlah_uang=None,
+            jenis_zakat=akad_create.jenis_zakat,
+            jenis_akad=akad_create.jenis_akad,
+        ))
+        conn.commit()
+        id_rekap = generate_next_id_year(db, 'ZMAH')
+        rekap = conn.execute(rekap_zakat.insert().values(
+            id_rekap=id_rekap,
+            id_akad=id_akad,
+            nama_muzzaki=akad_create.nama_muzzaki,
+            harga_beras=None,
+            jumlah_keluarga=akad_create.jumlah_keluarga,
+            jumlah_literan=jumlah_literan,
             jumlah_uang=None,
             jenis_zakat=akad_create.jenis_zakat,
             jenis_akad=akad_create.jenis_akad,
@@ -229,28 +287,139 @@ async def store(akad_create: AkadZakatCreate, db: Session = Depends(get_db)):
         }
 
 
-#lebih pendek namun masih belum dipahamin alurnya
-@app.post('/tambah-akad1')
-async def store(akad_create: AkadZakatCreate, db: Session = Depends(get_db)):
-    insert_data = akad_create.dict()
+# #lebih pendek namun masih belum dipahamin alurnya
+# @app.post('/tambah-akad1')
+# async def store(akad_create: AkadZakatCreate, db: Session = Depends(get_db)):
+#     insert_data = akad_create.dict()
 
-    # Ensure that only valid columns are used for insertion
-    valid_columns = [col.name for col in akad_zakat.columns]
-    insert_data = {key: insert_data[key] for key in valid_columns if key in insert_data}
+#     # Ensure that only valid columns are used for insertion
+#     valid_columns = [col.name for col in akad_zakat.columns]
+#     insert_data = {key: insert_data[key] for key in valid_columns if key in insert_data}
 
-    data = conn.execute(akad_zakat.insert().values(**insert_data))
+#     data = conn.execute(akad_zakat.insert().values(**insert_data))
+#     conn.commit()
+
+#     if data.is_insert:
+#         return {
+#             "success": True,
+#             "msg": "Akad Zakat Store Successfully"
+#         }
+#     else:
+#         return {
+#             "success": False,
+#             "msg": "Some Problem"
+#         }
+
+@app.get('/akad-zakat', response_model=Dict[str, Any])
+async def index(db: Session = Depends(get_db)):
+    query = select(akad_zakat)
+    result = db.execute(query).fetchall()
+    
+    # Mengkonversi hasil query menjadi format yang dapat di-serialize oleh Pydantic
+    data = [{
+        "id_akad": row.id_akad, 
+        "nama_muzzaki": row.nama_muzzaki, 
+        "nama_amil": row.nama_amil, 
+        "id_beras": row.id_beras, 
+        "harga_beras": row.harga_beras,
+        "jumlah_keluarga": row.jumlah_keluarga,
+        "jumlah_literan": row.jumlah_literan,
+        "tanggal_akad": row.tanggal_akad,
+        "jumlah_uang": row.jumlah_uang,
+        "jenis_zakat": row.jenis_zakat,
+        "jenis_akad": row.jenis_akad,} 
+        for row in result]
+    
+    return {
+        "success": True,
+        "data": data
+    }
+
+@app.get('/rekap-zakat', response_model=Dict[str, Any])
+async def index(db: Session = Depends(get_db)):
+    query = select(rekap_zakat)
+    result = db.execute(query).fetchall()
+    
+    # Mengkonversi hasil query menjadi format yang dapat di-serialize oleh Pydantic
+    data = [{
+        "id_rekap": row.id_rekap,
+        "id_akad": row.id_akad, 
+        "nama_muzzaki": row.nama_muzzaki,  
+        "harga_beras": row.harga_beras,
+        "jumlah_keluarga": row.jumlah_keluarga,
+        "jumlah_literan": row.jumlah_literan,
+        "tanggal_akad": row.tanggal_akad,
+        "jumlah_uang": row.jumlah_uang,
+        "jenis_zakat": row.jenis_zakat,
+        "jenis_akad": row.jenis_akad,
+        "tahun":row.tahun} 
+        for row in result]
+    
+    return {
+        "success": True,
+        "data": data
+    }
+
+@app.get('/search-rekap-tahunan/{search}',response_model=Dict[str, Any])
+async def search(tahun: str, db: Session = Depends(get_db)):
+    result = db.execute(select(rekap_zakat).where(rekap_zakat.c.tahun.like('%' + tahun + '%'))).fetchall()
+    data = [{
+        "id_rekap": row.id_rekap,
+        "id_akad": row.id_akad, 
+        "nama_muzzaki": row.nama_muzzaki,  
+        "harga_beras": row.harga_beras,
+        "jumlah_keluarga": row.jumlah_keluarga,
+        "jumlah_literan": row.jumlah_literan,
+        "tanggal_akad": row.tanggal_akad,
+        "jumlah_uang": row.jumlah_uang,
+        "jenis_zakat": row.jenis_zakat,
+        "jenis_akad": row.jenis_akad,
+        "tahun":row.tahun} 
+        for row in result]
+    # conn.commit()
+    return {
+        "success": True,
+        "data":data
+    }
+
+@app.delete('/delete-rekap-tahunan')
+async def delete(tahun:str):
+    data=conn.execute(rekap_zakat.delete().where(rekap_zakat.c.tahun==tahun))
     conn.commit()
-
-    if data.is_insert:
+    if data:
         return {
             "success": True,
-            "msg": "Akad Zakat Store Successfully"
+            "msg":"Rekap Tahunan Delete Successfully"
         }
     else:
-        return {
+         return {
             "success": False,
-            "msg": "Some Problem"
+            "msg":"Some Problem"
         }
+
+@app.delete('/delete-akad-zakat')
+async def delete():
+    data=conn.execute(akad_zakat.delete())
+    conn.commit()
+    if data:
+        return {
+            "success": True,
+            "msg":"Table Akad Zakat Delete Successfully"
+        }
+    else:
+         return {
+            "success": False,
+            "msg":"Some Problem"
+        }
+
+
+################ End Route Akad Zakat ######################
+################ End Stack Route ######################
+
+
+
+
+
 
 
 
